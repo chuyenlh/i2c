@@ -8,28 +8,31 @@ partitions {
 	#address-cells = <1>;
 	#size-cells = <1>;
 
+	/*
+	PJA: adjust for TEE with early TAs
+        */
 	u-boot@0 {
-		reg = <0x0 0x140000>; // 1280KB
+		reg = <0x0 0x210000>; // 1280KB
 		label = "u-boot";
 	};
 
 	u-boot-env@140000 {
-		reg = <0x140000 0x20000>; // 128KB
+		reg = <0x210000 0x20000>; // 128KB
 		label = "u-boot-env";
 	};
 
 	kernel@160000 {
-		reg = <0x160000 0x800000>; // 8MB
+		reg = <0x230000 0x800000>; // 8MB
 		label = "kernel";
 	};
 
 	rofs@960000 {
-		reg = <0x960000 0x24a0000>; // 36.625MB
+		reg = <0xa30000 0x24a0000>; // 36.625MB
 		label = "rofs";
 	};
 
 	rwfs@2e00000 {
-		reg = <0x2e00000 0x1200000>; // 18MB
+		reg = <0x2ed0000 0x1200000>; // 18MB
 		label = "rwfs";
 	};
 };

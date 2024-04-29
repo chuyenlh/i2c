@@ -33,13 +33,17 @@
 		reg = <0x80000000 0x80000000>;
 	};
 
+	ftpm {
+		compatible = "microsoft,ftpm";
+	};
+
 	reserved-memory {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges;
 
 		optee_core: optee_core@b0000000 {
-			reg = <0xb0000000 0x1000000>;
+			reg = <0xb0000000 0x04000000>;
 			no-map;
 		};
 
@@ -78,14 +82,14 @@
 			no-map;
 		};
 
-		mctp0_reserved: mctp0_reserved@b1000000 {
-			reg = <0xb1000000 0x10000>;
+		mctp0_reserved: mctp0_reserved@b4000000 {
+			reg = <0xb4000000 0x10000>;
 			compatible = "shared-dma-pool";
 			no-map;
 		};
 
-		mctp1_reserved: mctp1_reserved@b1010000 {
-			reg = <0xb1010000 0x10000>;
+		mctp1_reserved: mctp1_reserved@b4010000 {
+			reg = <0xb4010000 0x10000>;
 			compatible = "shared-dma-pool";
 			no-map;
 		};

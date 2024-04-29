@@ -28,9 +28,13 @@
  * https://github.com/microsoft/ms-tpm-20-ref/blob/master/Samples/ARM32-FirmwareTPM/optee_ta/fTPM/include/fTPM.h#L42
  */
 static const uuid_t ftpm_ta_uuid =
+#if 1
+	UUID_INIT(0xA6AAB7F6, 0x4F16, 0xFB51,
+		  0x96, 0xBC, 0xCF, 0x78, 0xE7, 0x4F, 0xB1, 0x3F);
+#else
 	UUID_INIT(0xBC50D971, 0xD4C9, 0x42C4,
 		  0x82, 0xCB, 0x34, 0x3F, 0xB7, 0xF3, 0x78, 0x96);
-
+#endif
 /**
  * ftpm_tee_tpm_op_recv() - retrieve fTPM response.
  * @chip:	the tpm_chip description as specified in driver/char/tpm/tpm.h.
@@ -372,8 +376,13 @@ static struct platform_driver ftpm_tee_plat_driver = {
 
 /* UUID of the fTPM TA */
 static const struct tee_client_device_id optee_ftpm_id_table[] = {
+#if 1
+	{UUID_INIT(0xA6AAB7F6, 0x4F16, 0xFB51,
+		   0x96, 0xBC, 0xCF, 0x78, 0xE7, 0x4F, 0xB1, 0x3F)},
+#else
 	{UUID_INIT(0xbc50d971, 0xd4c9, 0x42c4,
 		   0x82, 0xcb, 0x34, 0x3f, 0xb7, 0xf3, 0x78, 0x96)},
+#endif
 	{}
 };
 
