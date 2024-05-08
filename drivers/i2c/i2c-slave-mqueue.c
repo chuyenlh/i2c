@@ -21,79 +21,56 @@ struct mq_msg {
 struct mq_queue {
 	struct bin_attribute	bin;
 	struct kernfs_node	*kn;
+
 	spinlock_t		lock; /* spinlock for queue index handling */
+	int			in;
+	int			out;
+
+	struct mq_msg		*curr;
 	int			truncated; /* drop current if truncated */
-	struct mq_msg		buffer_read;
-	struct mq_msg		buffer_write;
-	bool is_read;
-	u16 buffer_write_idx;
+	struct mq_msg		queue[MQ_QUEUE_SIZE];
 };
 
 static int i2c_slave_mqueue_callback(struct i2c_client *client,
 				     enum i2c_slave_event event, u8 *val)
 {
 	struct mq_queue *mq = i2c_get_clientdata(client);
-	struct mq_msg *msg_read = &mq->buffer_read;
-	struct mq_msg *msg_wr = &mq->buffer_write;
-	struct device *dev = &client->dev;
+	struct mq_msg *msg = mq->curr;
 	int ret = 0;
 
 	switch (event) {
 	case I2C_SLAVE_WRITE_REQUESTED:
-		mq->is_read = false;
 		mq->truncated = 0;
 
-		msg_read->len = 1;
-		msg_read->buf[0] = client->addr << 1;
+		msg->len = 1;
+		msg->buf[0] = client->addr << 1;
 		break;
 
 	case I2C_SLAVE_WRITE_RECEIVED:
-		if (msg_read->len < MQ_MSGBUF_SIZE) {
-			msg_read->buf[msg_read->len++] = *val;
+		if (msg->len < MQ_MSGBUF_SIZE) {
+			msg->buf[msg->len++] = *val;
 		} else {
 			dev_err(&client->dev, "message is truncated!\n");
 			mq->truncated = 1;
 			ret = -EINVAL;
 		}
 		break;
-	
-	case I2C_SLAVE_READ_PROCESSED:
-		if (mq->buffer_write_idx < msg_wr->len) {
-			*val = msg_wr->buf[mq->buffer_write_idx++];
-		} else {
-			*val = 0xFF;
-		}
-
-		break;
-
-	case I2C_SLAVE_READ_REQUESTED:
-		dev_info(dev, "Got I2C_SLAVE_READ_REQUESTED event!\n");
-		dev_info(dev, "buffer idx: %d ----- len %d \n", mq->buffer_write_idx, msg_wr->len);
-		mq->is_read = true;
-		if (mq->buffer_write_idx < msg_wr->len) {
-			*val = msg_wr->buf[mq->buffer_write_idx++];
-		} else {
-			*val = 0xFF;
-		}
-		break;
 
 	case I2C_SLAVE_STOP:
-		if (!mq->is_read) {
-			dev_info(dev, "Got I2C_SLAVE_STOP READ event!\n");
-			if (unlikely(mq->truncated || msg_read->len < 2))
-				break;
-			kernfs_notify(mq->kn);
-		} else {
-			dev_info(dev, "Got I2C_SLAVE_STOP WRITE event!\n");
-			spin_lock(&mq->lock);
-			dev_info(dev, "buffer idx: %d ----- len %d \n", mq->buffer_write_idx, msg_wr->len);
-			if (mq->buffer_write_idx == msg_wr->len) {
-				msg_wr->len = 0;
-				mq->buffer_write_idx = 0;
-			}
-			spin_unlock(&mq->lock);
-		}
+		if (unlikely(mq->truncated || msg->len < 2))
+			break;
 
+		spin_lock(&mq->lock);
+		mq->in = MQ_QUEUE_NEXT(mq->in);
+		mq->curr = &mq->queue[mq->in];
+		mq->curr->len = 0;
+
+		/* Flush the oldest message */
+		if (mq->out == mq->in)
+			mq->out = MQ_QUEUE_NEXT(mq->out);
+		spin_unlock(&mq->lock);
+
+		kernfs_notify(mq->kn);
 		break;
 
 	default:
@@ -112,50 +89,30 @@ static ssize_t i2c_slave_mqueue_bin_read(struct file *filp,
 	struct mq_queue *mq;
 	struct mq_msg *msg;
 	unsigned long flags;
+	bool more = false;
 	ssize_t ret = 0;
 
 	mq = dev_get_drvdata(container_of(kobj, struct device, kobj));
 
 	spin_lock_irqsave(&mq->lock, flags);
-	msg = &mq->buffer_read;
+	if (mq->out != mq->in) {
+		msg = &mq->queue[mq->out];
 
-	if (msg->len <= count) {
-		ret = msg->len;
-		memcpy(buf, msg->buf, ret);
-	} else {
-		ret = -EOVERFLOW; /* Drop this HUGE one. */
+		if (msg->len <= count) {
+			ret = msg->len;
+			memcpy(buf, msg->buf, ret);
+		} else {
+			ret = -EOVERFLOW; /* Drop this HUGE one. */
+		}
+
+		mq->out = MQ_QUEUE_NEXT(mq->out);
+		if (mq->out != mq->in)
+			more = true;
 	}
-
 	spin_unlock_irqrestore(&mq->lock, flags);
-	return ret;
-}
 
-static ssize_t i2c_slave_mqueue_bin_write(struct file *filp,
-					 struct kobject *kobj,
-					 struct bin_attribute *attr,
-					 char *buf, loff_t pos, size_t count)
-{
-	struct mq_queue *mq;
-	struct mq_msg *msg;
-	unsigned long flags;
-
-	ssize_t ret = 0;
-
-	mq = dev_get_drvdata(container_of(kobj, struct device, kobj));
-
-	spin_lock_irqsave(&mq->lock, flags);
-
-	mq->buffer_write_idx = 0;
-	msg = &mq->buffer_write;
-	if (count <= MQ_MSGBUF_SIZE) {
-		msg->len = count;
-		memcpy(msg->buf, buf, msg->len);
-		ret = msg->len;
-	} else {
-		ret = -EOVERFLOW; /* Drop this HUGE one. */
-	}
-
-	spin_unlock_irqrestore(&mq->lock, flags);
+	if (more)
+		kernfs_notify(mq->kn);
 
 	return ret;
 }
@@ -167,7 +124,6 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client,
 	struct mq_queue *mq;
 	int ret, i;
 	void *buf;
-	void *buf_wr;
 
 	mq = devm_kzalloc(dev, sizeof(*mq), GFP_KERNEL);
 	if (!mq)
@@ -175,27 +131,24 @@ static int i2c_slave_mqueue_probe(struct i2c_client *client,
 
 	BUILD_BUG_ON(!is_power_of_2(MQ_QUEUE_SIZE));
 
-	buf = devm_kmalloc(dev, MQ_MSGBUF_SIZE, GFP_KERNEL);
+	buf = devm_kmalloc_array(dev, MQ_QUEUE_SIZE, MQ_MSGBUF_SIZE,
+				 GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
-	mq->buffer_read.buf = buf;
-	
-	buf_wr = devm_kmalloc(dev, MQ_MSGBUF_SIZE, GFP_KERNEL);
-	if (!buf_wr)
-		return -ENOMEM;
-
-	mq->buffer_write.buf = buf_wr;
+	for (i = 0; i < MQ_QUEUE_SIZE; i++)
+		mq->queue[i].buf = buf + i * MQ_MSGBUF_SIZE;
 
 	i2c_set_clientdata(client, mq);
 
 	spin_lock_init(&mq->lock);
+	mq->curr = &mq->queue[0];
+
 	sysfs_bin_attr_init(&mq->bin);
 	mq->bin.attr.name = "slave-mqueue";
-	mq->bin.attr.mode = S_IRUSR | S_IWUSR;;
+	mq->bin.attr.mode = 0400;
 	mq->bin.read = i2c_slave_mqueue_bin_read;
-	mq->bin.write = i2c_slave_mqueue_bin_write;
-	mq->bin.size = MQ_MSGBUF_SIZE * MQ_QUEUE_SIZE + MQ_MSGBUF_SIZE * MQ_QUEUE_SIZE;
+	mq->bin.size = MQ_MSGBUF_SIZE * MQ_QUEUE_SIZE;
 
 	ret = sysfs_create_bin_file(&dev->kobj, &mq->bin);
 	if (ret)
